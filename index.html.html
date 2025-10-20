@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Graduate School Fair — Interactive Map (Production)</title>
+<style>
+  :root { --accent: #3a7bff; --muted: #666; }
+  body{font-family:system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin:18px; color:#111;}
+  h1{margin:0 0 12px 0; font-size:20px;}
+  .container{display:grid; grid-template-columns:380px 1fr; gap:18px; align-items:start;}
+  .panel{background:#fff; border:1px solid #ddd; border-radius:8px; padding:12px; box-shadow:0 2px 6px rgba(0,0,0,0.04);}
+  .controls{display:flex; gap:8px; margin-bottom:8px;}
+  input[type="search"]{width:100%; padding:8px; border-radius:6px; border:1px solid #ccc;}
+  .clear-btn{background:#eee; border:none; padding:6px 10px; border-radius:6px; cursor:pointer;}
+  .filters-row{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;}
+  .chip{padding:6px 8px; border-radius:16px; background:#f3f4f6; cursor:pointer; font-size:13px; border:1px solid #e6e7ea;}
+  .chip.active{background:var(--accent); color:#fff; border-color:#2b63d6;}
+  .attendee-list{max-height:580px; overflow:auto; margin-top:8px;}
+  .attendee{padding:8px; border-bottom:1px solid #f0f0f0; cursor:pointer; display:flex; justify-content:space-between; align-items:center;}
+  .attendee:hover{background:#f7f9ff;}
+  .badge{font-size:12px; color:#333; background:#f0f0f0; padding:4px 8px; border-radius:16px;}
+  .map-wrapper{position:relative; display:flex; flex-direction:column; gap:10px;}
+  .map-canvas{position:relative; width:100%; border-radius:8px; overflow:hidden; border:1px solid #e6e7ea; background:#fafafa; min-height:520px;}
+  .map-image{display:block; width:100%; height:auto; user-select:none; -webkit-user-drag:none;}
+  svg.hotspots{position:absolute; inset:0; pointer-events:none;}
+  rect.hotspot{cursor:pointer; pointer-events:auto; fill:rgba(58,123,255,0.08); stroke:rgba(58,123,255,0.3); stroke-width:1; rx:6; ry:6;}
+  rect.hotspot:hover{fill:rgba(58,123,255,0.12);}
+  rect.hotspot.active{fill:rgba(58,123,255,0.18); stroke:rgba(20,80,220,0.9); stroke-width:2;}
+  text.hotspot-label{pointer-events:none; font-size:12px; fill:#073; text-shadow:0 1px 0 #fff;}
+  .details{padding:8px; border-top:1px solid #eee; font-size:14px; display:none;}
+  .controls-row{display:flex; justify-content:space-between; align-items:center;}
+  footer{font-size:12px; color:#666; margin-top:10px;}
+  .empty-note{color:#999; font-size:13px; padding:16px;}
+  @media(max-width:900px){.container{grid-template-columns:1fr} .map-canvas{min-height:420px}}
+</style>
+</head>
+<body>
+  <h1>Graduate School Fair — Interactive Map</h1>
+  <div class="container">
+    <div class="panel" aria-label="controls">
+      <div class="controls">
+        <input id="searchInput" type="search" placeholder="Search institutions (press Enter)"/>
+        <button id="clearSearch" class="clear-btn" title="Clear search">Clear</button>
+      </div>
+
+      <div class="small">Filter by Program(s) of Study — click chips to toggle</div>
+      <div id="programFilters" class="filters-row" aria-label="program filters"></div>
+
+      <div class="attendee-list panel" style="margin-top:10px; padding:8px;">
+        <div id="attendeesContainer"></div>
+      </div>
+      <footer>Map image file: <code>25GPSIE draft MAP (w header) (3).png</code></footer>
+    </div>
+
+    <div class="panel map-wrapper">
+      <div class="controls-row">
+        <div><strong>Floor Map (click hotspots)</strong></div>
+        <div><button id="resetBtn" class="clear-btn">Reset</button></div>
+      </div>
+
+      <div id="mapCanvas" class="map-canvas">
+        <img id="mapImage" class="map-image" src="25GPSIE draft MAP (w header) (3).png" alt="Floor map (exported from PDF)">
+        <svg id="svgOverlay" class="hotspots" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+
+      <div id="detailCard" class="details"></div>
+    </div>
+  </div>
+
+<script>
+/* ---------- Attendee data (parsed from roster) ---------- */
+const attendees = [
+  {table: "B4", institution: "Adler University — Graduate Admissions", programs: ["Counseling/Child Development","Graduate Certificates","MA Military Psychology","PsyD","PhD Industrial/Organizational"]},
+  {table: "G3", institution: "Aurora University — Graduate Programs", programs: ["Athletic Training","Business","Computer Science/Data","Counseling/Child Development","Education","Nursing","Public Policy","Social Work"]},
+  {table: "C4", institution: "Bradley University — Graduate Admissions", programs: ["Business","Computer Science/Data","Counseling/Child Development","Data Science","Engineering","Game Design","Nonprofit Management","Nursing","Nutrition & Dietetics","Physical Therapy","Science","Sports Communication"]},
+  {table: "D2", institution: "Butler University — Graduate & Online Programs", programs: ["Business","Counseling/Child Development","Fine Arts","Medical School/Health Professions"]},
+  {table: "B2", institution: "Dominican University — School of Information Studies", programs: ["Library Science/Information Studies"]},
+  {table: "F4", institution: "Elmhurst University — School of Graduate Studies", programs: ["Business","Computer Science/Data","Education","Industrial/Organizational Psychology","Nursing","Occupational Therapy","Speech Language Pathology"]},
+  {table: "D1", institution: "Governors State University — College of Health & Human Services", programs: ["Nursing","Occupational Therapy","Physical Therapy","Public Health","Social Work","Speech Language Pathology"]},
+  {table: "G4", institution: "Illinois State University — Graduate School", programs: ["Athletic Training","Business","Computer Science/Data","Counseling/Child Development","Education","Fine Arts","Library Science","Nursing","Psychology/PsyD","Public Health","Science","Social Work","SLP"]},
+  {table: "C5", institution: "Illinois Tech — Graduate Admissions", programs: ["Business","Computer Science/Data","Counseling/Child Development","Engineering","Law","Psychology/PsyD","Public Policy","Science"]},
+  {table: "D5", institution: "Loyola University Chicago — Graduate & Professional Admissions", programs: ["Business","Computer Science/Data","Counseling/Child Development","Education","Law","Library Science","Nursing","Public Health","Public Policy","Science","Social Work","Theology"]},
+  {table: "D4", institution: "Marquette University — Graduate School", programs: ["Athletic Training","Business","Computer Science/Data","Counseling/Child Development","Engineering","English","History","Science","Theology"]},
+  {table: "B5", institution: "Marquette University — Law School", programs: ["Law"]},
+  {table: "C2", institution: "Millikin University — Tabor School of Business / Professional Studies", programs: ["Athletic Training","Business","Nursing"]},
+  {table: "C1", institution: "North Central College — School of Graduate & Professional Studies", programs: ["Athletic Training","Business","Medical School/Health","Nursing","Occupational Therapy","Physical Therapy"]},
+  {table: "B1-PA", institution: "Northern Illinois University — Dept. of Public Administration", programs: ["Public Administration"]},
+  {table: "F3", institution: "Olivet Nazarene University — Graduate & Continuing Studies", programs: ["Business","Education","Nursing","Sport Management"]},
+  {table: "H5", institution: "Quincy University — Graduate Studies Program", programs: ["Business","Counseling/Child Development","Education","Occupational Therapy","Physical Therapy"]},
+  {table: "G2", institution: "Roosevelt University — College of Science, Health & Pharmacy", programs: ["Business","Computer Science/Data","Counseling/Child Development","Education","Fine Arts","Nursing","Occupational Therapy","Physical Therapy","Psychology/PsyD","Science"]},
+  {table: "F1", institution: "Rosalind Franklin University of Medicine & Science", programs: ["Medical School/Health","Nursing","Physical Therapy","Psychology/PsyD","Science"]},
+  {table: "E5", institution: "Saint Louis University — Graduate Admission Office", programs: ["Athletic Training","Business","Computer Science/Data","Counseling/Child Development","Education","Engineering","Fine Arts","Law","Library Science","Medical School/Health","Nursing","Occupational Therapy","Physical Therapy","Psychology/PsyD","Public Health","Public Policy","Science","Social Work","SLP","Theology"]},
+  {table: "G5", institution: "Southern Illinois University Carbondale — Graduate School", programs: ["Business","Computer Science/Data","Education","Engineering","Fine Arts","Occupational Therapy","Public Health","Public Policy","Social Work"]},
+  {table: "F5", institution: "Southern Illinois University Edwardsville — Graduate & International Admissions", programs: ["Athletic Training","Business","Computer Science/Data","Education","Engineering","Fine Arts","Nursing","Psychology/PsyD","Public Health","Public Policy","Science","Social Work","SLP"]},
+  {table: "A1", institution: "Southern Illinois University School of Medicine", programs: ["Science"]},
+  {table: "H4", institution: "Truman State University — Graduate Admissions", programs: ["Applied Behavior Analysis","Athletic Training","Business","Computer Science/Data","Counseling/Child Development","Education","Fine Arts","Psychology/PsyD","Public Policy","SLP"]},
+  {table: "E3", institution: "University of Illinois Chicago — Retzky College of Pharmacy", programs: ["Pharmacy"]},
+  {table: "A3", institution: "University of Chicago — Crown Family School of Social Work, Policy, and Practice", programs: ["Social Work"]},
+  {table: "D3", institution: "University of Illinois Springfield — Graduate Admission", programs: ["Counseling/Child Development","Education","Public Health","Public Policy"]},
+  {table: "E1", institution: "University of Illinois Springfield — Master of Athletic Training Program", programs: ["Athletic Training"]},
+  {table: "C3", institution: "University of Illinois Springfield — Office of Admission", programs: ["Business","Communication","Computer Science/Data","Environmental Science","History"]},
+  {table: "A4", institution: "University of Illinois Urbana-Champaign — Gies College of Business", programs: ["Business","Business Analytics","Technology Management"]},
+  {table: "E2", institution: "University of Illinois Urbana-Champaign — College of Applied Health Sciences", programs: ["Public Health","Health Administration"]},
+  {table: "E4", institution: "University of Illinois Urbana-Champaign — Health Technology", programs: ["Health Technology"]},
+  {table: "F2", institution: "University of Indianapolis — College of Applied Health Sciences", programs: ["Athletic Training","Nursing","Occupational Therapy","Physical Therapy","Public Health"]},
+  {table: "H3", institution: "University of Wisconsin - Milwaukee — Graduate School", programs: ["Architecture & Urban Planning","Athletic Training","Business","Computer Science/Data","Counseling/Child Development","Education","Engineering","Fine Arts","Library Science","Nursing","Occupational Therapy","Physical Therapy","Psychology/PsyD","Public Health","Public Policy","Science","Social Work","SLP"]},
+  {table: "B3", institution: "Valparaiso University — Graduate Admission", programs: ["Business","Counseling/Child Development","Nursing","Occupational Therapy","Public Health","Social Work"]},
+  {table: "A2", institution: "Washington University in St. Louis — Brown School", programs: ["Public Policy","Social Work","Social Policy"]}
+];
+
+/* ---------- Helpers & table lookup ---------- */
+function normalizeTable(tableCode) {
+  const match = tableCode.match(/([A-H])\s*[-_]*\s*([1-5])/i);
+  if (match) return (match[1].toUpperCase() + match[2]);
+  return tableCode;
+}
+const tableLookup = {};
+attendees.forEach(a=>{
+  const cell = normalizeTable(a.table);
+  if (!tableLookup[cell]) tableLookup[cell] = [];
+  tableLookup[cell].push(a);
+});
+
+/* ---------- Hotspots: pasted JSON from user ---------- */
+const hotspots = [
+    {"code":"A1","x":5.477,"y":76.384,"w":9.345,"h":8.843},
+    {"code":"A2","x":5.479,"y":62.544,"w":9.345,"h":9.012},
+    {"code":"A3","x":5.47,"y":48.45,"w":9.345,"h":9.265},
+    {"code":"A4","x":5.479,"y":34.609,"w":9.345,"h":9.18},
+    {"code":"B1","x":15.784,"y":76.279,"w":9.28,"h":9.18},
+    {"code":"B2","x":15.78,"y":62.185,"w":9.28,"h":9.687},
+    {"code":"B3","x":15.712,"y":48.344,"w":9.411,"h":9.265},
+    {"code":"B4","x":15.708,"y":34.504,"w":9.345,"h":9.349},
+    {"code":"B5","x":15.769,"y":20.495,"w":9.215,"h":8.843},
+    {"code":"C1","x":26.025,"y":76.256,"w":9.15,"h":9.012},
+    {"code":"C2","x":26.086,"y":62.416,"w":9.15,"h":9.18},
+    {"code":"C3","x":26.083,"y":48.153,"w":9.215,"h":9.602},
+    {"code":"C4","x":25.949,"y":34.65,"w":9.411,"h":9.012},
+    {"code":"C5","x":26.01,"y":20.388,"w":9.345,"h":9.434},
+    {"code":"D1","x":40.833,"y":76.404,"w":9.215,"h":9.265},
+    {"code":"D2","x":40.829,"y":62.226,"w":9.28,"h":9.349},
+    {"code":"D3","x":40.761,"y":48.217,"w":9.541,"h":9.18},
+    {"code":"D4","x":40.822,"y":34.629,"w":9.15,"h":9.349},
+    {"code":"D5","x":40.752,"y":20.62,"w":9.476,"h":9.012},
+    {"code":"E1","x":51.4,"y":76.214,"w":9.345,"h":9.434},
+    {"code":"E2","x":51.396,"y":62.374,"w":9.345,"h":9.012},
+    {"code":"E3","x":51.459,"y":48.449,"w":9.411,"h":9.18},
+    {"code":"E4","x":51.454,"y":34.355,"w":9.28,"h":9.349},
+    {"code":"E5","x":51.516,"y":20.514,"w":9.345,"h":9.012},
+    {"code":"F1","x":65.164,"y":76.277,"w":9.085,"h":9.012},
+    {"code":"F2","x":65.03,"y":62.268,"w":9.345,"h":9.012},
+    {"code":"F3","x":65.027,"y":48.427,"w":9.345,"h":9.012},
+    {"code":"F4","x":65.088,"y":34.418,"w":9.28,"h":9.096},
+    {"code":"F5","x":65.084,"y":20.578,"w":9.476,"h":9.18},
+    {"code":"G2","x":75.532,"y":62.416,"w":9.345,"h":9.18},
+    {"code":"G3","x":75.464,"y":48.406,"w":9.345,"h":9.265},
+    {"code":"G4","x":75.525,"y":34.566,"w":9.215,"h":9.18},
+    {"code":"G5","x":75.521,"y":20.472,"w":9.28,"h":9.349},
+    {"code":"H3","x":85.77,"y":48.554,"w":9.28,"h":9.012},
+    {"code":"H4","x":85.701,"y":34.46,"w":9.345,"h":9.265},
+    {"code":"H5","x":85.762,"y":20.62,"w":9.28,"h":9.096}
+];
+
+/* ---------- Build program filters list ---------- */
+function normalizeProgram(p) { return p.replace(/\s*\(.*?\)/g,"").trim(); }
+let programSet = new Set();
+attendees.forEach(a => a.programs && a.programs.forEach(p => programSet.add(normalizeProgram(p))));
+const programs = Array.from(programSet).sort((a,b)=>a.localeCompare(b));
+
+/* ---------- Render program chips ---------- */
+const programFilters = document.getElementById('programFilters');
+const activeFilters = new Set();
+programs.forEach(p=>{
+  const chip = document.createElement('button');
+  chip.className = 'chip';
+  chip.textContent = p;
+  chip.title = p;
+  chip.onclick = () => {
+    if (activeFilters.has(p)) { activeFilters.delete(p); chip.classList.remove('active'); }
+    else { activeFilters.add(p); chip.classList.add('active'); }
+    renderAttendeeList();
+    renderHotspots();
+  };
+  programFilters.appendChild(chip);
+});
+
+/* ---------- SVG overlay build ---------- */
+const mapImage = document.getElementById('mapImage');
+const svgOverlay = document.getElementById('svgOverlay');
+const detailCard = document.getElementById('detailCard');
+
+function buildSVG() {
+  // clear
+  while (svgOverlay.firstChild) svgOverlay.removeChild(svgOverlay.firstChild);
+  const ns = "http://www.w3.org/2000/svg";
+  hotspots.forEach(h => {
+    const rect = document.createElementNS(ns, 'rect');
+    rect.classList.add('hotspot');
+    rect.setAttribute('data-code', h.code);
+    // placeholders; real values set by positionHotspots()
+    rect.setAttribute('x', 0); rect.setAttribute('y', 0); rect.setAttribute('width', 0); rect.setAttribute('height', 0);
+    rect.setAttribute('rx', 6); rect.setAttribute('ry', 6);
+    svgOverlay.appendChild(rect);
+
+    const label = document.createElementNS(ns, 'text');
+    label.classList.add('hotspot-label');
+    label.setAttribute('data-code', h.code);
+    label.setAttribute('x', 0); label.setAttribute('y', 0);
+    label.textContent = h.code;
+    svgOverlay.appendChild(label);
+
+    // click handlers
+    rect.addEventListener('click', (ev) => { ev.stopPropagation(); onHotspotClick(h.code); });
+    label.addEventListener('click', (ev) => { ev.stopPropagation(); onHotspotClick(h.code); });
+  });
+  positionHotspots();
+}
+
+function positionHotspots() {
+  const img = mapImage;
+  if (!img.naturalWidth) return;
+  const imgW = img.clientWidth;
+  const imgH = img.clientHeight;
+  svgOverlay.setAttribute('viewBox', `0 0 ${imgW} ${imgH}`);
+  svgOverlay.setAttribute('width', imgW);
+  svgOverlay.setAttribute('height', imgH);
+
+  hotspots.forEach(h => {
+    const rect = svgOverlay.querySelector(`rect.hotspot[data-code="${h.code}"]`);
+    if (!rect) return;
+    const x = (h.x/100) * imgW;
+    const y = (h.y/100) * imgH;
+    const w = (h.w/100) * imgW;
+    const ht = (h.h/100) * imgH;
+    rect.setAttribute('x', x);
+    rect.setAttribute('y', y);
+    rect.setAttribute('width', w);
+    rect.setAttribute('height', ht);
+
+    const label = svgOverlay.querySelector(`text[data-code="${h.code}"]`);
+    if (label) {
+      label.setAttribute('x', x + 6);
+      label.setAttribute('y', y + 16);
+      label.style.fontSize = Math.max(10, Math.round(Math.min(w, ht) * 0.22)) + 'px';
+      label.style.fill = '#073';
+    }
+  });
+  renderHotspots(); // apply visibility per filters
+}
+
+/* ---------- Render logic & interactions ---------- */
+function renderHotspots() {
+  const rects = svgOverlay.querySelectorAll('rect.hotspot');
+  rects.forEach(rect => {
+    const code = rect.getAttribute('data-code');
+    const list = tableLookup[code] ? tableLookup[code].slice() : [];
+    let visibleList = list;
+    if (activeFilters.size > 0) visibleList = list.filter(a => a.programs && a.programs.some(p => activeFilters.has(normalizeProgram(p))));
+    if (visibleList.length === 0) {
+      rect.style.display = 'none';
+      const label = svgOverlay.querySelector(`text[data-code="${code}"]`);
+      if (label) label.style.display = 'none';
+    } else {
+      rect.style.display = '';
+      const label = svgOverlay.querySelector(`text[data-code="${code}"]`);
+      if (label) label.style.display = '';
+    }
+    rect.setAttribute('title', visibleList.map(a => a.institution).join('; '));
+  });
+}
+
+/* hotspot click */
+let selectedCode = null;
+function onHotspotClick(code) {
+  selectedCode = code;
+  svgOverlay.querySelectorAll('rect.hotspot').forEach(r => r.classList.remove('active'));
+  const rect = svgOverlay.querySelector(`rect.hotspot[data-code="${code}"]`);
+  if (rect) rect.classList.add('active');
+
+  let list = tableLookup[code] ? tableLookup[code].slice() : [];
+  if (activeFilters.size > 0) list = list.filter(a => a.programs && a.programs.some(p => activeFilters.has(normalizeProgram(p))));
+  if (list.length === 0) {
+    detailCard.style.display = 'block';
+    detailCard.innerHTML = `<div class="empty-note">No institutions here matching the current filters.</div>`;
+    return;
+  }
+  let html = `<strong>Table ${code}</strong><div style="margin-top:6px">${list.length} institution(s):</div><div style="margin-top:8px">`;
+  list.forEach((a, idx) => {
+    const idxAll = attendees.indexOf(a);
+    html += `<div style="padding:8px 0;border-top:${idx?"1px solid #f0f0f0":"0"}"><a href="#" data-idx="${idxAll}" class="instLink">${a.institution}</a><div class="small">Programs: ${a.programs.slice(0,3).join(", ")}${a.programs.length>3?"…":""}</div></div>`;
+  });
+  html += `</div>`;
+  detailCard.style.display = 'block';
+  detailCard.innerHTML = html;
+
+  detailCard.querySelectorAll('.instLink').forEach(link => {
+    link.addEventListener('click', ev => {
+      ev.preventDefault();
+      const idx = parseInt(link.dataset.idx);
+      const att = attendees[idx];
+      showDetailsFor(att);
+      const code2 = normalizeTable(att.table);
+      const rect2 = svgOverlay.querySelector(`rect.hotspot[data-code="${code2}"]`);
+      if (rect2) {
+        svgOverlay.querySelectorAll('rect.hotspot').forEach(r => r.classList.remove('active'));
+        rect2.classList.add('active');
+      }
+    });
+  });
+}
+
+/* ---------- Attendee list rendering & search/filter ---------- */
+const attendeesContainer = document.getElementById('attendeesContainer');
+const searchInput = document.getElementById('searchInput');
+
+function renderAttendeeList(){
+  attendeesContainer.innerHTML = '';
+  const q = (searchInput.value || '').trim().toLowerCase();
+  let filtered = attendees.filter(a => {
+    if (q && !a.institution.toLowerCase().includes(q)) return false;
+    if (activeFilters.size === 0) return true;
+    return a.programs && a.programs.some(p => activeFilters.has(normalizeProgram(p)));
+  });
+  if (filtered.length === 0) {
+    attendeesContainer.innerHTML = `<div class="empty-note">No institutions match your search/filters.</div>`;
+    return;
+  }
+  filtered.sort((x,y)=> x.institution.localeCompare(y.institution));
+  filtered.forEach(a=>{
+    const el = document.createElement('div');
+    el.className = 'attendee';
+    el.innerHTML = `<div><div style="font-weight:600">${a.institution}</div><div class="small">Table: <span class="badge">${a.table}</span></div></div><div style="text-align:right"><div class="small">${(a.programs||[]).slice(0,2).join(", ")}${(a.programs||[]).length>2?"…":""}</div><div style="margin-top:6px"><button class="clear-btn show-btn" data-table="${normalizeTable(a.table)}">Show on map</button></div></div>`;
+    attendeesContainer.appendChild(el);
+    el.querySelector('.show-btn').addEventListener('click', ()=>{
+      const cellCode = normalizeTable(a.table);
+      const rect = svgOverlay.querySelector(`rect.hotspot[data-code="${cellCode}"]`);
+      if (rect) {
+        rect.dispatchEvent(new Event('click'));
+        mapImage.scrollIntoView({behavior:'smooth', block:'center'});
+      } else {
+        alert('Table ' + cellCode + ' not found on current hotspots.');
+      }
+    });
+    el.addEventListener('click', (ev) => { if (ev.target.tagName.toLowerCase() === 'button') return; showDetailsFor(a); });
+  });
+}
+
+function showDetailsFor(att) {
+  detailCard.style.display = 'block';
+  detailCard.innerHTML = `<strong>${att.institution}</strong><div class="small">Table: <span class="badge">${att.table}</span></div><div style="margin-top:8px"><strong>Programs:</strong>${(att.programs||[]).map(p=>`<div>• ${p}</div>`).join('')}</div>`;
+  const code = normalizeTable(att.table);
+  const rect = svgOverlay.querySelector(`rect.hotspot[data-code="${code}"]`);
+  if (rect) {
+    svgOverlay.querySelectorAll('rect.hotspot').forEach(r => r.classList.remove('active'));
+    rect.classList.add('active');
+  }
+}
+
+/* ---------- Initialization & handlers ---------- */
+mapImage.addEventListener('load', ()=> {
+  buildSVG();
+  positionHotspots();
+  renderAttendeeList();
+});
+
+window.addEventListener('resize', ()=> positionHotspots());
+
+document.getElementById('clearSearch').addEventListener('click', ()=> { searchInput.value=''; renderAttendeeList(); renderHotspots(); });
+searchInput.addEventListener('keyup', (e)=> { if (e.key==='Enter') renderAttendeeList(); });
+
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  svgOverlay.querySelectorAll('rect.hotspot').forEach(r=>r.classList.remove('active'));
+  detailCard.style.display = 'none';
+  activeFilters.clear();
+  document.querySelectorAll('.chip').forEach(ch => ch.classList.remove('active'));
+  renderAttendeeList();
+  renderHotspots();
+});
+
+/* If image already loaded */
+if (mapImage.complete && mapImage.naturalWidth) {
+  mapImage.dispatchEvent(new Event('load'));
+}
+
+/* Position function referenced above (keeps linter happy) */
+function positionHotspots(){ // same as built earlier; defined above but ensure callable
+  const img = mapImage;
+  if (!img.naturalWidth) return;
+  const imgW = img.clientWidth;
+  const imgH = img.clientHeight;
+  svgOverlay.setAttribute('viewBox', `0 0 ${imgW} ${imgH}`);
+  svgOverlay.setAttribute('width', imgW);
+  svgOverlay.setAttribute('height', imgH);
+  hotspots.forEach(h => {
+    const rect = svgOverlay.querySelector(`rect.hotspot[data-code="${h.code}"]`);
+    if (!rect) return;
+    const x = (h.x/100) * imgW;
+    const y = (h.y/100) * imgH;
+    const w = (h.w/100) * imgW;
+    const ht = (h.h/100) * imgH;
+    rect.setAttribute('x', x);
+    rect.setAttribute('y', y);
+    rect.setAttribute('width', w);
+    rect.setAttribute('height', ht);
+    const label = svgOverlay.querySelector(`text[data-code="${h.code}"]`);
+    if (label) {
+      label.setAttribute('x', x + 6);
+      label.setAttribute('y', y + 16);
+      label.style.fontSize = Math.max(10, Math.round(Math.min(w, ht) * 0.22)) + 'px';
+    }
+  });
+  renderHotspots();
+}
+</script>
+</body>
+</html>
